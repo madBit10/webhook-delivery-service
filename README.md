@@ -40,8 +40,17 @@ HTTP → Router → Service → Repository → Database
 ## Getting Started
 
 ```bash
-# create + activate a virtualenv, then
+# 1. create + activate a virtualenv, then install deps
 pip install -r requirements.txt
+
+# 2. create a .env with: DATABASE_URL, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+#    then start Postgres
+docker compose up -d
+
+# 3. apply database migrations
+alembic upgrade head
+
+# 4. run the app
 uvicorn app.main:app --reload
 ```
 
@@ -51,7 +60,8 @@ uvicorn app.main:app --reload
 ## Roadmap
 
 - [x] Layered FastAPI scaffold + `/health` endpoint
-- [ ] Dockerize (app + Postgres + Redis via docker-compose)
+- [x] Dockerize app + Postgres via docker-compose *(Redis later)*
+- [x] Data layer — SQLAlchemy engine/session, `Endpoint` model, Alembic migrations
 - [ ] Endpoint registration + event emission (Postgres-backed)
 - [ ] Async delivery via Redis workers
 - [ ] Retries, exponential backoff, dead-letter queue, idempotency

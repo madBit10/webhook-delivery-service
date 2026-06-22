@@ -108,16 +108,62 @@ docker compose down          # stop + remove containers (named volume SURVIVES)
 
 ---
 
+## 3. SQLAlchemy engine + session (connect Python → Postgres)
+
+Three core objects in `app/db/database.py`:
+- **`engine = create_engine(DATABASE_URL)`** — a managed **pool** of connections to Postgres
+  (opening a connection is expensive, so we keep a few ready and reuse them). One per app.
+- **`SessionLocal = sessionmaker(bind=engine)`** — a *factory* that hands out **Session** objects.
+  A Session is the **workspace for one unit of work**: add/query objects, then `commit()` or `rollback()`.
+  Short-lived — one per request.
+- **`Base = declarative_base()`** — the parent class every model inherits from; it holds the
+  `metadata` (the registry of all tables) that Alembic later reads.
+- **`get_db()`** — FastAPI dependency using `yield` + `finally: db.close()` so every borrowed
+  connection is **always** returned to the pool, even on error.
+
+Proved end-to-end with `test_db.py` (`SELECT 1` → printed `1`).
+
+## 4. Config via pydantic-settings + `.env` (no secrets in code)
+
+- `app/core/config.py`: `Settings(BaseSettings)` reads `DATABASE_URL` from `.env`.
+- Moved `POSTGRES_USER/PASSWORD/DB` **out of** `docker-compose.yml` into `.env`; the compose file now
+  only references them via `${POSTGRES_USER}` etc. → **committed files contain zero secrets**
+  (`.env` is gitignored). Verify substitution with `docker compose config`.
+- ⚠️ **YAML indent gotcha (again):** all env vars must sit one level *under* `environment:` at the
+  same depth — a mis-indented line becomes a service property and Compose errors.
+- ⚠️ `POSTGRES_*` only take effect on **first boot** (they init the data volume). Changing them later
+  needs `docker compose down -v` to recreate the volume.
+
+## 5. First model + Alembic migrations (went the production route)
+
+- `app/db/model.py`: `Endpoint(Base)` → table `endpoints` with `id` (PK, indexed, auto-increment via a
+  Postgres **sequence**), `url`, `secret`, `event_types` (CSV for now), `is_active`.
+  - **`nullable=False` = SQL `NOT NULL`** (the correct equivalent of "required"; `required=` is Pydantic, not SQLAlchemy).
+  - **App-side `default=True` vs DB-side `server_default`:** `default=True` is filled in by the ORM, not the
+    database — so it does **not** appear in the migration / `\d endpoints`. Fine for ORM inserts; use
+    `server_default` if raw SQL inserts must get the default too.
+- **Alembic = "Git for the database schema."** Migration = commit, revision id = hash,
+  `down_revision` = parent, `alembic_version` table = the DB's "which migration am I on" sticker,
+  `upgrade()`/`downgrade()` = apply/undo, `--autogenerate` = diff models vs. real DB into a script.
+- Setup: `pip install alembic` → `alembic init alembic` → wired `env.py`
+  (`target_metadata = Base.metadata`, **import the model module so the table registers**, pull the URL
+  from `settings`) → `alembic revision --autogenerate -m "create endpoints table"` → **reviewed the
+  generated file** → `alembic upgrade head`.
+- Verified: `\d endpoints` shows all 5 columns NOT NULL; `alembic_version` = `576715d853ee`.
+
+---
+
 ## ✅ Status & next
 
-**Done today (steps 1–2 of 5):**
+**Day 2 complete (all 5 steps) — chose the production path (Alembic) over `create_all`:**
 1. ✅ Why a database + why an ORM
 2. ✅ `docker-compose` → Postgres running & verified
+3. ✅ SQLAlchemy engine + session (proven via `test_db.py`)
+4. ✅ Config via pydantic-settings + `.env`; secrets moved out of compose
+5. ✅ First model `endpoints` — created via **Alembic migration**
 
-**Next session (steps 3–5):**
-3. ⏭️ **SQLAlchemy engine + session** — connect Python to this Postgres
-4. Config via **pydantic-settings + `.env`** — DB connection string, no secrets in code
-   (also move the `POSTGRES_*` values out of `docker-compose.yml` into `.env`)
-5. **First model** — the `endpoints` table (url, secret, event_types, is_active)
+> Branch `feat/data-layer` → committed, pushed, merged to `main`. ✅
 
-> Branch for this work: `feat/data-layer` (off `main`).
+**Next session:** endpoint **registration** — API route + **repository** layer to insert rows into
+`endpoints`. New concepts to learn: CRUD, commit/rollback in practice, repository pattern,
+**Pydantic schema vs. ORM model**.
