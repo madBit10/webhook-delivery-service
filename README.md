@@ -57,12 +57,43 @@ uvicorn app.main:app --reload
 - API: http://127.0.0.1:8000
 - Interactive docs (Swagger): http://127.0.0.1:8000/docs
 
+## API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness check → `{"status": "ok"}` |
+| `POST` | `/endpoints` | Register a webhook endpoint |
+
+### `POST /endpoints`
+
+Registers a subscriber URL. The server generates a cryptographically-secure HMAC signing
+secret (`secrets.token_hex`) and stores it — the secret is **never returned** in any response.
+
+**Request**
+```json
+{
+  "url": "https://example.com/webhook",
+  "event_types": "order.created"
+}
+```
+
+**Response** `201 Created`
+```json
+{
+  "id": 1,
+  "url": "https://example.com/webhook",
+  "event_types": "order.created",
+  "is_active": true
+}
+```
+
 ## Roadmap
 
 - [x] Layered FastAPI scaffold + `/health` endpoint
 - [x] Dockerize app + Postgres via docker-compose *(Redis later)*
 - [x] Data layer — SQLAlchemy engine/session, `Endpoint` model, Alembic migrations
-- [ ] Endpoint registration + event emission (Postgres-backed)
+- [x] Endpoint registration — `POST /endpoints` (server-generated HMAC signing secret)
+- [ ] Event emission (Postgres-backed)
 - [ ] Async delivery via Redis workers
 - [ ] Retries, exponential backoff, dead-letter queue, idempotency
 - [ ] HMAC signatures + API-key auth + rate limiting
