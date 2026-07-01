@@ -1,7 +1,7 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, HttpUrl
 
 class EndpointCreate(BaseModel):
-    url: str
+    url: HttpUrl
     event_types: str
 
 class EndpointRead(BaseModel):
