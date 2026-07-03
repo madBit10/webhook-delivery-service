@@ -1,15 +1,20 @@
 from app.db.model import Endpoint
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
 
 
 # create_endpoint inserts rows in the endpoint table
 def create_endpoint(db: Session, url: str, event_types: str, secret: str) -> Endpoint:
     endpoint = Endpoint(url=url, event_types=event_types, secret=secret)
-    db.add(endpoint) # stage in the session
-    db.commit() # write to DB, make permanent
-    db.refresh(endpoint) # reload from DB so we get the generated id
-
+    try:
+        db.add(endpoint) # stage in the session
+        db.commit() # write to DB, make permanent
+        db.refresh(endpoint) # reload from DB so we get the generated id
+    except SQLAlchemyError:
+        db.rollback() # rollback if the error is encountered
+        raise
+    
     return endpoint
 
 # get all the endpoints in the form of the list from the endpoint table
