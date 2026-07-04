@@ -63,11 +63,15 @@ uvicorn app.main:app --reload
 |--------|------|-------------|
 | `GET` | `/health` | Liveness check → `{"status": "ok"}` |
 | `POST` | `/endpoints` | Register a webhook endpoint |
+| `GET` | `/endpoints` | List endpoints (paginated: `?skip=&limit=`) |
+| `GET` | `/endpoints/{id}` | Get one endpoint (404 if missing) |
+| `POST` | `/events` | Emit an event for an endpoint |
 
 ### `POST /endpoints`
 
 Registers a subscriber URL. The server generates a cryptographically-secure HMAC signing
 secret (`secrets.token_hex`) and stores it — the secret is **never returned** in any response.
+The `url` is validated as a real URL (`HttpUrl`) on input.
 
 **Request**
 ```json
@@ -87,13 +91,41 @@ secret (`secrets.token_hex`) and stores it — the secret is **never returned** 
 }
 ```
 
+### `POST /events`
+
+Emits an event for a registered endpoint. The event is **durably stored with `status: "pending"`
+before any delivery is attempted** — delivery happens later, asynchronously. If the referenced
+`endpoint_id` doesn't exist, returns `404` (validated in the app layer; the DB foreign key is a
+safety net).
+
+**Request**
+```json
+{
+  "endpoint_id": 1,
+  "event_type": "order.created",
+  "payload": { "order_id": 12345, "amount": 99.50 }
+}
+```
+
+**Response** `201 Created`
+```json
+{
+  "id": 1,
+  "endpoint_id": 1,
+  "event_type": "order.created",
+  "payload": { "order_id": 12345, "amount": 99.50 },
+  "status": "pending",
+  "created_at": "2026-07-04T10:00:00+00:00"
+}
+```
+
 ## Roadmap
 
 - [x] Layered FastAPI scaffold + `/health` endpoint
 - [x] Dockerize app + Postgres via docker-compose *(Redis later)*
 - [x] Data layer — SQLAlchemy engine/session, `Endpoint` model, Alembic migrations
 - [x] Endpoint registration — `POST /endpoints` (server-generated HMAC signing secret)
-- [ ] Event emission (Postgres-backed)
+- [x] Event emission — `POST /events` (FK to endpoints, stored as `pending` before delivery)
 - [ ] Async delivery via Redis workers
 - [ ] Retries, exponential backoff, dead-letter queue, idempotency
 - [ ] HMAC signatures + API-key auth + rate limiting
