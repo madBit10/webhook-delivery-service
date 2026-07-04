@@ -1,4 +1,4 @@
-from app.db.model import Endpoint
+from app.db.model import Endpoint, Event
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
@@ -31,5 +31,23 @@ def get_endpoint(db:Session, endpoint_id: int) -> Optional[Endpoint]:
     single_endpoint = db.query(Endpoint).filter(Endpoint.id == endpoint_id)
 
     return single_endpoint.first()
+
+# inserting a new event row and return it - same add -> commit -> refresh
+
+def create_event(db: Session, endpoint_id: int, event_type: str, payload: dict) -> Event: 
+    event = Event(
+        endpoint_id=endpoint_id, 
+        event_type=event_type,
+        payload=payload
+        )
+    try:
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+        return event
+    except SQLAlchemyError: 
+        db.rollback()
+        raise
+
 
 
