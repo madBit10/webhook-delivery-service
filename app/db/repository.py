@@ -1,4 +1,4 @@
-from app.db.model import Endpoint, Event
+from app.db.model import Endpoint, Event, DeliveryAttempt
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
@@ -46,6 +46,42 @@ def create_event(db: Session, endpoint_id: int, event_type: str, payload: dict) 
         db.refresh(event)
         return event
     except SQLAlchemyError: 
+        db.rollback()
+        raise
+
+# new function create_delivery_attempt - same as above -> add -> commit -> refresh
+
+def create_delivery_attempt(db: Session, event_id: int, success: bool, response_status_code: Optional[int], response_body: Optional[str]) -> DeliveryAttempt:
+    delivery_attempt = DeliveryAttempt(
+        event_id = event_id,
+        success = success,
+        response_status_code = response_status_code,
+        response_body = response_body,
+    )
+
+    try:
+        db.add(delivery_attempt)
+        db.commit()
+        db.refresh(delivery_attempt)
+        return delivery_attempt
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+
+# update the event status after the delivery attempt is done
+
+def update_event_status(db: Session, event_id: int, new_status: str) -> Optional[Event]:
+
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if event is None:
+        return None
+    event.status = new_status # mutate the loaded object
+
+    try:
+        db.commit()
+        db.refresh(event)
+        return event
+    except SQLAlchemyError:
         db.rollback()
         raise
 
