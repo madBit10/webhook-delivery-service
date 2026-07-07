@@ -94,9 +94,17 @@ The `url` is validated as a real URL (`HttpUrl`) on input.
 ### `POST /events`
 
 Emits an event for a registered endpoint. The event is **durably stored with `status: "pending"`
-before any delivery is attempted** — delivery happens later, asynchronously. If the referenced
-`endpoint_id` doesn't exist, returns `404` (validated in the app layer; the DB foreign key is a
-safety net).
+before any delivery is attempted**, then delivery is attempted **immediately (synchronously, for
+now)**: the service POSTs the payload to the endpoint's URL (`httpx`, 5s timeout), records the
+outcome in `delivery_attempts`, and updates the event's `status` to `delivered` or `failed`. The
+response reflects that final status.
+
+Returns `201` **even if delivery fails** — `201` means the event was *accepted and stored*, not that
+it was delivered; a failed delivery is retried later (see roadmap). If the referenced `endpoint_id`
+doesn't exist, returns `404` (validated in the app layer; the DB foreign key is a safety net).
+
+> **Note:** synchronous delivery is a stepping stone. Delivery will move onto an async Redis worker,
+> which restores "respond to the producer immediately, deliver in the background."
 
 **Request**
 ```json
@@ -114,10 +122,18 @@ safety net).
   "endpoint_id": 1,
   "event_type": "order.created",
   "payload": { "order_id": 12345, "amount": 99.50 },
-  "status": "pending",
+  "status": "delivered",
   "created_at": "2026-07-04T10:00:00+00:00"
 }
 ```
+
+**Delivery outcomes** — every attempt is logged in `delivery_attempts`:
+
+| Outcome | `success` | `response_status_code` | Event `status` |
+|---|---|---|---|
+| Receiver returns `2xx` | `true` | e.g. `200` | `delivered` |
+| Receiver returns non-`2xx` | `false` | e.g. `500` | `failed` |
+| Receiver unreachable / timeout | `false` | `NULL` (no response) | `failed` |
 
 ## Roadmap
 
@@ -126,7 +142,8 @@ safety net).
 - [x] Data layer — SQLAlchemy engine/session, `Endpoint` model, Alembic migrations
 - [x] Endpoint registration — `POST /endpoints` (server-generated HMAC signing secret)
 - [x] Event emission — `POST /events` (FK to endpoints, stored as `pending` before delivery)
-- [ ] Async delivery via Redis workers
+- [x] Synchronous delivery — `deliver_event` (httpx POST + 5s timeout), `delivery_attempts` log (2nd FK), status → `delivered`/`failed`, all 3 outcomes verified
+- [ ] Async delivery via Redis workers (move delivery off the request path)
 - [ ] Retries, exponential backoff, dead-letter queue, idempotency
 - [ ] HMAC signatures + API-key auth + rate limiting
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
