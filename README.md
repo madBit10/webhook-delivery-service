@@ -43,8 +43,9 @@ HTTP → Router → Service → Repository → Database
 # 1. create + activate a virtualenv, then install deps
 pip install -r requirements.txt
 
-# 2. create a .env with: DATABASE_URL, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
-#    then start Postgres
+# 2. create a .env with: DATABASE_URL, POSTGRES_USER, POSTGRES_PASSWORD,
+#    POSTGRES_DB, REDIS_URL (e.g. redis://localhost:6379/0)
+#    then start Postgres + Redis
 docker compose up -d
 
 # 3. apply database migrations
@@ -52,10 +53,16 @@ alembic upgrade head
 
 # 4. run the app
 uvicorn app.main:app --reload
+
+# 5. in a SECOND terminal, run the delivery worker
+python -m app.worker
 ```
 
 - API: http://127.0.0.1:8000
 - Interactive docs (Swagger): http://127.0.0.1:8000/docs
+
+> The **worker** is a separate process from the API. The API stores events and
+> queues them; the worker drains the queue and performs delivery. Run both.
 
 ## API
 
@@ -93,18 +100,18 @@ The `url` is validated as a real URL (`HttpUrl`) on input.
 
 ### `POST /events`
 
-Emits an event for a registered endpoint. The event is **durably stored with `status: "pending"`
-before any delivery is attempted**, then delivery is attempted **immediately (synchronously, for
-now)**: the service POSTs the payload to the endpoint's URL (`httpx`, 5s timeout), records the
-outcome in `delivery_attempts`, and updates the event's `status` to `delivered` or `failed`. The
-response reflects that final status.
+Emits an event for a registered endpoint. The event is **durably stored with `status: "pending"`**,
+its id is **pushed onto a Redis queue**, and the endpoint returns **immediately** — delivery happens
+**asynchronously** on a separate worker process, off the request path. The response therefore reflects
+`status: "pending"` (delivery hasn't happened yet).
 
-Returns `201` **even if delivery fails** — `201` means the event was *accepted and stored*, not that
-it was delivered; a failed delivery is retried later (see roadmap). If the referenced `endpoint_id`
-doesn't exist, returns `404` (validated in the app layer; the DB foreign key is a safety net).
+A background **worker** (`python -m app.worker`) blocks on the queue, loads each event from the DB,
+POSTs the payload to the endpoint's URL (`httpx`, 5s timeout), records the outcome in
+`delivery_attempts`, and updates the event's `status` to `delivered` or `failed`.
 
-> **Note:** synchronous delivery is a stepping stone. Delivery will move onto an async Redis worker,
-> which restores "respond to the producer immediately, deliver in the background."
+Returns `201` — meaning the event was *accepted and stored*, not that it was delivered (a failed
+delivery is retried later; see roadmap). If the referenced `endpoint_id` doesn't exist, returns `404`
+(validated in the app layer; the DB foreign key is a safety net).
 
 **Request**
 ```json
@@ -122,8 +129,8 @@ doesn't exist, returns `404` (validated in the app layer; the DB foreign key is 
   "endpoint_id": 1,
   "event_type": "order.created",
   "payload": { "order_id": 12345, "amount": 99.50 },
-  "status": "delivered",
-  "created_at": "2026-07-04T10:00:00+00:00"
+  "status": "pending",
+  "created_at": "2026-07-13T10:00:00+00:00"
 }
 ```
 
@@ -138,12 +145,12 @@ doesn't exist, returns `404` (validated in the app layer; the DB foreign key is 
 ## Roadmap
 
 - [x] Layered FastAPI scaffold + `/health` endpoint
-- [x] Dockerize app + Postgres via docker-compose *(Redis later)*
+- [x] Dockerize app + Postgres + Redis via docker-compose
 - [x] Data layer — SQLAlchemy engine/session, `Endpoint` model, Alembic migrations
 - [x] Endpoint registration — `POST /endpoints` (server-generated HMAC signing secret)
 - [x] Event emission — `POST /events` (FK to endpoints, stored as `pending` before delivery)
 - [x] Synchronous delivery — `deliver_event` (httpx POST + 5s timeout), `delivery_attempts` log (2nd FK), status → `delivered`/`failed`, all 3 outcomes verified
-- [ ] Async delivery via Redis workers (move delivery off the request path)
+- [x] Async delivery via Redis queue + worker — delivery moved off the request path (producer enqueues event id, worker drains queue and delivers)
 - [ ] Retries, exponential backoff, dead-letter queue, idempotency
 - [ ] HMAC signatures + API-key auth + rate limiting
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
