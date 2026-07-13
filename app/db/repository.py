@@ -86,4 +86,9 @@ def update_event_status(db: Session, event_id: int, new_status: str) -> Optional
         raise
 
 
+# function to get the event from the event id for the redis worker
+
+def get_event(db:Session, event_id: int)->Optional[Event]:
+    return db.query(Event).filter(Event.id == event_id).first()
+
 
