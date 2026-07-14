@@ -27,4 +27,6 @@ class DeliveryAttempt(Base):
     success = Column(Boolean, nullable=False)
     response_status_code = Column(Integer, nullable=True)
     response_body = Column(String, nullable=True)
+    attempt_number = Column(Integer, nullable=False)
+    duration_ms = Column(Integer, nullable=True) 
 

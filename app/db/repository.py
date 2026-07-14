@@ -51,12 +51,15 @@ def create_event(db: Session, endpoint_id: int, event_type: str, payload: dict) 
 
 # new function create_delivery_attempt - same as above -> add -> commit -> refresh
 
-def create_delivery_attempt(db: Session, event_id: int, success: bool, response_status_code: Optional[int], response_body: Optional[str]) -> DeliveryAttempt:
+def create_delivery_attempt(db: Session, event_id: int, success: bool, response_status_code: Optional[int], response_body: Optional[str], attempt_number: int, duration_ms: Optional[int]) -> DeliveryAttempt:
     delivery_attempt = DeliveryAttempt(
         event_id = event_id,
         success = success,
         response_status_code = response_status_code,
         response_body = response_body,
+        attempt_number = attempt_number,
+        duration_ms = duration_ms
+
     )
 
     try:
@@ -91,4 +94,9 @@ def update_event_status(db: Session, event_id: int, new_status: str) -> Optional
 def get_event(db:Session, event_id: int)->Optional[Event]:
     return db.query(Event).filter(Event.id == event_id).first()
 
+# A repo helper to count prior attempts (this is how we derive the attempt_number)
 
+def count_delivery_attempts(db: Session, event_id: int)-> int:
+    # attempt_number = prior delivery attempts + 1
+
+    return db.query(DeliveryAttempt).filter(DeliveryAttempt.id == event_id).count()
