@@ -1,10 +1,11 @@
 from sqlalchemy.orm import Session
 from typing import Optional
 import httpx
+import time
 
 
 from app.api.schemas.event import EventCreate
-from app.db.repository import create_event, get_endpoint as get_endpoint_repo, create_delivery_attempt, update_event_status
+from app.db.repository import create_event, get_endpoint as get_endpoint_repo, create_delivery_attempt, update_event_status, count_delivery_attempts
 from app.db.model import Event
 
 def emit_event(db: Session, data: EventCreate) -> Optional[Event]:
@@ -19,6 +20,9 @@ def emit_event(db: Session, data: EventCreate) -> Optional[Event]:
 
 def deliver_event(db: Session, event: Event) -> Event:
 
+    # testing line
+    # raise RuntimeError("boom")
+
     # get the endpoint (for its URL)
 
     endpoint = get_endpoint_repo(db, event.endpoint_id)
@@ -28,6 +32,13 @@ def deliver_event(db: Session, event: Event) -> Event:
 
     # payload of the event
     payload = event.payload
+
+    # attempt_number adding to the deliver event function to track the number of attempts made
+    attempt_number = count_delivery_attempts(db, event.id) + 1
+
+    # start time using time.perf_counter
+
+    start = time.perf_counter()
 
     # POST with httpx
     try:
@@ -46,12 +57,15 @@ def deliver_event(db: Session, event: Event) -> Event:
         status_code = None
         body = str(e)
     
+    # duration of the HTTP call, how long did it take
+
+    duration_ms = int((time.perf_counter() - start) * 1000) # seconds -> ms -> int
     #0 truncate the body so you don't store a giant page
 
     body = body[:1000]
 
     # log the attempt (whatever happend, record it )
-    create_delivery_attempt(db, event.id, success, status_code, body)
+    create_delivery_attempt(db, event.id, success, status_code, body, attempt_number, duration_ms)
 
     # flip the event status based on success
 

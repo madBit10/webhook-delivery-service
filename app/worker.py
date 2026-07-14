@@ -19,6 +19,8 @@ def run_worker() -> None:
                 continue
             deliver_event(db, event) # reuse the Delivery here
             print(f"Delivered event {event_id}, status={event.status}")
+        except Exception as e:
+            print(f"Error processing event {event_id}: {e}")
         finally: 
             db.close() # always release the connection
 
