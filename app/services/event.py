@@ -18,7 +18,7 @@ def emit_event(db: Session, data: EventCreate) -> Optional[Event]:
 
 # deliver event function - deliver_event is the function that actually tries to hand the event's data to the subscriber, records what happened, and marks the event done or failed.
 
-def deliver_event(db: Session, event: Event) -> Event:
+def deliver_event(db: Session, event: Event) -> bool:
 
     # testing line
     # raise RuntimeError("boom")
@@ -67,12 +67,18 @@ def deliver_event(db: Session, event: Event) -> Event:
     # log the attempt (whatever happend, record it )
     create_delivery_attempt(db, event.id, success, status_code, body, attempt_number, duration_ms)
 
-    # flip the event status based on success
+    # # flip the event status based on success
 
-    new_status = "delivered" if success else "failed" # delivered or failed
+    # new_status = "delivered" if success else "failed" # delivered or failed
 
-    updated_event = update_event_status(db, event.id, new_status)
+    # updated_event = update_event_status(db, event.id, new_status)
 
-    return updated_event
+    # return updated_event
+
+    # now the deliver_event both delivers and sets the terminal, but the retry decision belongs to the worker
+
+    # deliver event just attempts the POST, logs the attempt, returns a bool(sucess). Now it does not touch the event status
+
+    return success
 
 

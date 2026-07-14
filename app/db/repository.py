@@ -99,4 +99,4 @@ def get_event(db:Session, event_id: int)->Optional[Event]:
 def count_delivery_attempts(db: Session, event_id: int)-> int:
     # attempt_number = prior delivery attempts + 1
 
-    return db.query(DeliveryAttempt).filter(DeliveryAttempt.id == event_id).count()
+    return db.query(DeliveryAttempt).filter(DeliveryAttempt.event_id == event_id).count()
