@@ -142,6 +142,11 @@ delivery is retried later; see roadmap). If the referenced `endpoint_id` doesn't
 | Receiver returns non-`2xx` | `false` | e.g. `500` | `failed` |
 | Receiver unreachable / timeout | `false` | `NULL` (no response) | `failed` |
 
+Each attempt row also records **`attempt_number`** (which try this was — 1, 2, 3… once retries land) and
+**`duration_ms`** (how long the outbound POST took, for observability). The **worker is crash-hardened**:
+an unexpected error on one event is logged and skipped, so it can never take down delivery for the rest of
+the queue.
+
 ## Roadmap
 
 - [x] Layered FastAPI scaffold + `/health` endpoint
@@ -151,7 +156,7 @@ delivery is retried later; see roadmap). If the referenced `endpoint_id` doesn't
 - [x] Event emission — `POST /events` (FK to endpoints, stored as `pending` before delivery)
 - [x] Synchronous delivery — `deliver_event` (httpx POST + 5s timeout), `delivery_attempts` log (2nd FK), status → `delivered`/`failed`, all 3 outcomes verified
 - [x] Async delivery via Redis queue + worker — delivery moved off the request path (producer enqueues event id, worker drains queue and delivers)
-- [ ] Retries, exponential backoff, dead-letter queue, idempotency
+- [ ] Retries, exponential backoff, dead-letter queue, idempotency *(in progress — retry schema `attempt_number`/`duration_ms` + crash-hardened worker done; backoff/DLQ next)*
 - [ ] HMAC signatures + API-key auth + rate limiting
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
 
