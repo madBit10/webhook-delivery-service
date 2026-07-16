@@ -105,13 +105,17 @@ its id is **pushed onto a Redis queue**, and the endpoint returns **immediately*
 **asynchronously** on a separate worker process, off the request path. The response therefore reflects
 `status: "pending"` (delivery hasn't happened yet).
 
-A background **worker** (`python -m app.worker`) blocks on the queue, loads each event from the DB,
-POSTs the payload to the endpoint's URL (`httpx`, 5s timeout), records the outcome in
-`delivery_attempts`, and updates the event's `status` to `delivered` or `failed`.
+A background **worker** (`python -m app.worker`) pulls each id off the queue, loads the event from the DB,
+POSTs the payload to the endpoint's URL (`httpx`, 5s timeout), and records the outcome in
+`delivery_attempts`. On failure it **retries up to 5 times** (`status` stays `pending` between tries);
+only once retries are exhausted does `status` become terminal `failed` (success → `delivered`).
 
-Returns `201` — meaning the event was *accepted and stored*, not that it was delivered (a failed
-delivery is retried later; see roadmap). If the referenced `endpoint_id` doesn't exist, returns `404`
-(validated in the app layer; the DB foreign key is a safety net).
+Delivery uses a **reliable queue**: the worker atomically moves each id to an in-flight `processing` list
+(`BLMOVE`) and only removes it after handling (`LREM`). If the worker crashes mid-delivery, the id
+survives and is re-queued on the next startup — so a hard crash can't orphan an event.
+
+Returns `201` — meaning the event was *accepted and stored*, not that it was delivered. If the referenced
+`endpoint_id` doesn't exist, returns `404` (validated in the app layer; the DB foreign key is a safety net).
 
 **Request**
 ```json
@@ -139,13 +143,12 @@ delivery is retried later; see roadmap). If the referenced `endpoint_id` doesn't
 | Outcome | `success` | `response_status_code` | Event `status` |
 |---|---|---|---|
 | Receiver returns `2xx` | `true` | e.g. `200` | `delivered` |
-| Receiver returns non-`2xx` | `false` | e.g. `500` | `failed` |
-| Receiver unreachable / timeout | `false` | `NULL` (no response) | `failed` |
+| Receiver returns non-`2xx` | `false` | e.g. `500` | `pending` → retry, then `failed` after 5 tries |
+| Receiver unreachable / timeout | `false` | `NULL` (no response) | `pending` → retry, then `failed` after 5 tries |
 
-Each attempt row also records **`attempt_number`** (which try this was — 1, 2, 3… once retries land) and
-**`duration_ms`** (how long the outbound POST took, for observability). The **worker is crash-hardened**:
-an unexpected error on one event is logged and skipped, so it can never take down delivery for the rest of
-the queue.
+Each attempt row also records **`attempt_number`** (which try this was — 1, 2, 3…) and **`duration_ms`**
+(how long the outbound POST took, for observability). The **worker is crash-hardened**: an unexpected
+error on one event is logged and skipped, so it can never take down delivery for the rest of the queue.
 
 ## Roadmap
 
@@ -156,7 +159,7 @@ the queue.
 - [x] Event emission — `POST /events` (FK to endpoints, stored as `pending` before delivery)
 - [x] Synchronous delivery — `deliver_event` (httpx POST + 5s timeout), `delivery_attempts` log (2nd FK), status → `delivered`/`failed`, all 3 outcomes verified
 - [x] Async delivery via Redis queue + worker — delivery moved off the request path (producer enqueues event id, worker drains queue and delivers)
-- [ ] Retries, exponential backoff, dead-letter queue, idempotency *(in progress — retry schema `attempt_number`/`duration_ms` + crash-hardened worker done; backoff/DLQ next)*
+- [ ] Retries, exponential backoff, dead-letter queue, idempotency *(in progress — ✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery; ⏳ next: backoff+jitter → DLQ → idempotency)*
 - [ ] HMAC signatures + API-key auth + rate limiting
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
 
