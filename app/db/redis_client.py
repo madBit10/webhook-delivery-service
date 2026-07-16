@@ -6,6 +6,7 @@ REDIS_URL = settings.redis_url
 
 # the queue key both sides agree on. Producer LPUSHes here, worker BRPOPs here. Making it a const means the route and the worker can never disagree on the name
 QUEUE_KEY = "webhook:delivery"
+PROCESSING_KEY = "webhook:processing" # BLMOVE pops from the main queue and pushes onto a processing list
 
 # creating a redis client 
 client = redis.from_url(REDIS_URL, decode_responses=True)

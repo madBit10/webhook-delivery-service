@@ -1,15 +1,28 @@
 from app.db.database import SessionLocal
-from app.db.redis_client import client, QUEUE_KEY, enqueue_event
+from app.db.redis_client import client, QUEUE_KEY, enqueue_event, PROCESSING_KEY
 from app.db.repository import get_event, update_event_status, count_delivery_attempts
 from app.services.event import deliver_event
 
 MAX_ATTEMPTS = 5 # maximum retries const 
 
+# recover the orphan ids that are stuck in the processing queue of the redis
+
+def recover_orphans() -> None:
+    """On startup, re-queue any ids stranded in the processing list by a previous crash."""
+
+    while True:
+        event_id = client.lmove(PROCESSING_KEY, QUEUE_KEY, src="LEFT", dest="RIGHT")
+        if event_id is None: # processing list empty -> done
+            break
+        print(f"Recovered orphaned event {event_id} from processing")
+
 def run_worker() -> None:
     print("Worker started, waiting for events...")
+    recover_orphans() # reclaim anything a previous crash left
     while True:
         # block until an id shows up; returns(queue_name, value)
-        _, event_id = client.brpop(QUEUE_KEY, timeout=0)
+        
+        event_id = client.blmove(QUEUE_KEY, PROCESSING_KEY, timeout=0, src="RIGHT", dest="LEFT") # src = RIGHT mimics the old BRPOPs and the dest = LEFT pushes it into the processing list
         event_id = int(event_id) # comes backs as string so to int
 
         db = SessionLocal() # our own session (no Depends here)
@@ -17,6 +30,7 @@ def run_worker() -> None:
         try:
             event = get_event(db, event_id)
             if event is None:
+                client.lrem(PROCESSING_KEY, 1, event_id) # ack before continue (nothing to recover for a ghost id)
                 print(f"Event {event_id} not found, skipping")
                 continue
             # deliver_event(db, event) # reuse the Delivery here
@@ -37,6 +51,9 @@ def run_worker() -> None:
                 else:
                     update_event_status(db, event.id, "failed") # maximum number of the attempts reached the event status saved as failed
                     print(f"Event {event_id} failed permanently after {attempts} attempts")
+
+            # ack once handling complete - after the if and else block so it only runs if handling finished without an exception
+            client.lrem(PROCESSING_KEY, 1, event_id) # ACK: handled -> remove from the processing
         except Exception as e:
             print(f"Error processing event {event_id}: {e}")
         finally: 
