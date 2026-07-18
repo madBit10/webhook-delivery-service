@@ -107,8 +107,10 @@ its id is **pushed onto a Redis queue**, and the endpoint returns **immediately*
 
 A background **worker** (`python -m app.worker`) pulls each id off the queue, loads the event from the DB,
 POSTs the payload to the endpoint's URL (`httpx`, 5s timeout), and records the outcome in
-`delivery_attempts`. On failure it **retries up to 5 times** (`status` stays `pending` between tries);
-only once retries are exhausted does `status` become terminal `failed` (success → `delivered`).
+`delivery_attempts`. On failure it **retries up to 5 times with exponential backoff + jitter** — delays
+double each attempt (~1, 2, 4, 8s, randomized) via a Redis sorted-set scheduled queue, so a struggling
+endpoint gets increasing breathing room instead of being hammered. `status` stays `pending` between
+tries; only once retries are exhausted does it become terminal `failed` (success → `delivered`).
 
 Delivery uses a **reliable queue**: the worker atomically moves each id to an in-flight `processing` list
 (`BLMOVE`) and only removes it after handling (`LREM`). If the worker crashes mid-delivery, the id
@@ -159,7 +161,7 @@ error on one event is logged and skipped, so it can never take down delivery for
 - [x] Event emission — `POST /events` (FK to endpoints, stored as `pending` before delivery)
 - [x] Synchronous delivery — `deliver_event` (httpx POST + 5s timeout), `delivery_attempts` log (2nd FK), status → `delivered`/`failed`, all 3 outcomes verified
 - [x] Async delivery via Redis queue + worker — delivery moved off the request path (producer enqueues event id, worker drains queue and delivers)
-- [ ] Retries, exponential backoff, dead-letter queue, idempotency *(in progress — ✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery; ⏳ next: backoff+jitter → DLQ → idempotency)*
+- [ ] Retries, exponential backoff, dead-letter queue, idempotency *(in progress — ✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery, ✅ exponential backoff + jitter (ZSET scheduled queue); ⏳ next: DLQ → idempotency)*
 - [ ] HMAC signatures + API-key auth + rate limiting
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
 
