@@ -1,5 +1,5 @@
 from app.db.database import SessionLocal
-from app.db.redis_client import client, QUEUE_KEY, enqueue_event, PROCESSING_KEY, schedule_retry, promote_due_retries
+from app.db.redis_client import client, QUEUE_KEY, PROCESSING_KEY, schedule_retry, promote_due_retries, dead_letter
 from app.db.repository import get_event, update_event_status, count_delivery_attempts
 from app.services.event import deliver_event
 
@@ -54,8 +54,10 @@ def run_worker() -> None:
                     delay = schedule_retry(event.id, attempts) # retry - status is still pending for these events until the maximum attempts are made
                     print(f"Event {event_id} failed (attempt {attempts}/{MAX_ATTEMPTS}), retry in {delay:.1f}s")
                 else:
-                    update_event_status(db, event.id, "failed") # maximum number of the attempts reached the event status saved as failed
-                    print(f"Event {event_id} failed permanently after {attempts} attempts")
+                    dead_letter(event_id)
+                    update_event_status(db, event.id, "dead") # maximum number of the attempts reached the event status saved as dead
+
+                    print(f"Event {event_id} failed permanently after {attempts} attempts, now the {event_id} is stated as dead in the database")
 
             # ack once handling complete - after the if and else block so it only runs if handling finished without an exception
             client.lrem(PROCESSING_KEY, 1, event_id) # ACK: handled -> remove from the processing

@@ -9,6 +9,7 @@ REDIS_URL = settings.redis_url
 QUEUE_KEY = "webhook:delivery"
 PROCESSING_KEY = "webhook:processing" # BLMOVE pops from the main queue and pushes onto a processing list
 DELAYED = "webhook:retries" # the ZSET (score = when to run)
+DEAD_KEY = "webhook:dead" # the DLQ for the events that fail after the retries
 
 BASE_DELAY = 1.0 # the start delay after what time each delivery will be scheduled if failed
 MAX_DELAY = 60.0 # cap of the delay 
@@ -16,9 +17,17 @@ MAX_DELAY = 60.0 # cap of the delay
 # creating a redis client 
 client = redis.from_url(REDIS_URL, decode_responses=True)
 
+
+# enqueues the events in the delivery queue from the producer side
 def enqueue_event(event_id: int) -> None:
     """Push an event id onto the delivery queue (producer side)"""
     client.lpush(QUEUE_KEY, event_id)
+
+# DLQ event that pushes the failed event in to the Dead Letter Queue
+
+def dead_letter(event_id: int) -> None:
+    """Push the failed event after the retries to the dead queue"""
+    client.lpush(DEAD_KEY,event_id)
 
 # producer : schedule a job to run delay seconds from now
 
