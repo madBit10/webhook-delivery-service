@@ -17,13 +17,19 @@ def register_endpoint(db: Session, data: EndpointCreate) -> Endpoint:
 
     return endpoint
 
-# listing the list_enpoints in the services
+# listing the enpoints in the services
+
+# Pass-through to the repo's paginated endpoint fetch. Kept as a service layer for consistency
+# (Router → Service → Repository) and as a hook for future logic (filtering, auth).
 
 def list_endpoints(db: Session, skip: int = 0, limit: int = 100) -> list[Endpoint]:
 
     return get_endpoints_repo(db, skip, limit)
 
 # listing the get_endpoint in the services
+
+# Pass-through to the repo's single-endpoint fetch. Returns None when missing — the route
+# raises the 404, so error-shaping stays in the API layer, not here.
 def get_endpoint(db: Session, endpoint_id: int) -> Optional[Endpoint]:
 
     return get_endpoint_repo(db, endpoint_id)
