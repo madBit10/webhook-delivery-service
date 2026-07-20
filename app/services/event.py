@@ -5,9 +5,23 @@ import time
 
 
 from app.api.schemas.event import EventCreate
-from app.db.repository import create_event, get_endpoint as get_endpoint_repo, create_delivery_attempt, update_event_status, count_delivery_attempts
+from app.db.repository import create_event, get_endpoint as get_endpoint_repo, create_delivery_attempt, count_delivery_attempts, get_events as get_events_repo, get_event as get_event_repo
 from app.db.model import Event
 
+# Pass-through to the repo's paginated event fetch. Kept as a service layer for consistency
+# (Router → Service → Repository) and as a hook for future logic (filtering, auth).
+def get_events(db: Session, skip: int = 0, limit: int = 100) -> list[Event]:
+
+    return get_events_repo(db, skip, limit) # lists the events 
+
+# Pass-through to the repo's single-event fetch. Returns None when missing — the route
+# raises the 404, so error-shaping stays in the API layer, not here.
+def get_event(db: Session, event_id: int) -> Optional[Event]:
+
+    return get_event_repo(db, event_id)
+
+
+# Ensure the endpoint exists, then persist the event as `pending` (delivery is async, done by the worker)
 def emit_event(db: Session, data: EventCreate) -> Optional[Event]:
     endpoint = get_endpoint_repo(db, data.endpoint_id) # does the endpoint exist?
 
@@ -80,5 +94,4 @@ def deliver_event(db: Session, event: Event) -> bool:
     # deliver event just attempts the POST, logs the attempt, returns a bool(sucess). Now it does not touch the event status
 
     return success
-
 

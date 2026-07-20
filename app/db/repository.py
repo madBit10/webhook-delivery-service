@@ -91,8 +91,16 @@ def update_event_status(db: Session, event_id: int, new_status: str) -> Optional
 
 # function to get the event from the event id for the redis worker
 
+# get the event from the event table using id of a particular event
 def get_event(db:Session, event_id: int)->Optional[Event]:
     return db.query(Event).filter(Event.id == event_id).first()
+
+# get all the events in the form of the list from the endpoint table
+def get_events(db:Session, skip: int = 0, limit: int = 100) -> list[Event]:
+
+    events = db.query(Event).offset(skip).limit(limit).all() # querying all the events from the event table with pagination 
+
+    return events
 
 # A repo helper to count prior attempts (this is how we derive the attempt_number)
 
