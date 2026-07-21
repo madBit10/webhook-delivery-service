@@ -32,6 +32,7 @@ export default function RootLayout({
         <nav className="flex gap-6 p-4 border-b">
           <Link href="/" className="font-medium hover:underline">Emit</Link>
           <Link href="/events" className="font-medium hover:underline">Events</Link>
+          <Link href="/dlq" className="font-medium hover:underline">DLQ</Link>
         </nav>
         {children}
       </body>
