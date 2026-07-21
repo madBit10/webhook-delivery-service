@@ -25,6 +25,7 @@ When something happens in one system (a payment succeeds, a build finishes), oth
 | API | FastAPI + Pydantic |
 | Persistence | PostgreSQL + SQLAlchemy + Alembic |
 | Async / queue | Redis + workers |
+| Frontend | Next.js (App Router) + TypeScript + Tailwind — a dashboard in `frontend/` |
 | Testing | pytest + httpx TestClient |
 | DevOps | Docker, docker-compose, GitHub Actions CI/CD, Terraform, AWS, Prometheus + Grafana |
 
@@ -63,6 +64,20 @@ python -m app.worker
 
 > The **worker** is a separate process from the API. The API stores events and
 > queues them; the worker drains the queue and performs delivery. Run both.
+
+### Frontend dashboard (optional)
+
+A Next.js dashboard lives in `frontend/`. It calls the API (CORS is enabled for
+`http://localhost:3000`), so run the backend first, then:
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:3000
+```
+
+Page 1 (**emit & watch**) posts an event and polls its status live —
+`pending → delivered / dead`. More pages (events list, dead-letter queue) in progress.
 
 ## API
 
@@ -165,7 +180,9 @@ error on one event is logged and skipped, so it can never take down delivery for
 - [x] Event emission — `POST /events` (FK to endpoints, stored as `pending` before delivery)
 - [x] Synchronous delivery — `deliver_event` (httpx POST + 5s timeout), `delivery_attempts` log (2nd FK), status → `delivered`/`failed`, all 3 outcomes verified
 - [x] Async delivery via Redis queue + worker — delivery moved off the request path (producer enqueues event id, worker drains queue and delivers)
-- [ ] Retries, exponential backoff, dead-letter queue, idempotency *(in progress — ✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery, ✅ exponential backoff + jitter (ZSET scheduled queue), ✅ dead-letter queue + `POST /dlq/replay`; ⏳ next: idempotency + `GET /events` reads)*
+- [x] Read paths — `GET /events`, `GET /events/{id}` + CORS for the dashboard
+- [ ] Retries, exponential backoff, dead-letter queue, idempotency *(in progress — ✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery, ✅ exponential backoff + jitter (ZSET scheduled queue), ✅ dead-letter queue + `POST /dlq/replay`; ⏳ next: idempotency)*
+- [ ] Frontend dashboard (Next.js) *(in progress — ✅ emit-and-watch page; ⏳ events list, DLQ view + replay)*
 - [ ] HMAC signatures + API-key auth + rate limiting
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
 
