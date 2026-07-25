@@ -77,8 +77,11 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
-Page 1 (**emit & watch**) posts an event and polls its status live —
-`pending → delivered / dead`. More pages (events list, dead-letter queue) in progress.
+Three pages, wired together with shared nav:
+
+- **Emit & watch** (`/`) — posts an event and polls its status live (`pending → delivered / dead`).
+- **Events** (`/events`) — lists all events with color-coded status badges.
+- **Dead-letter queue** (`/dlq`) — shows dead-lettered events with a **Replay** button (`POST /dlq/replay`).
 
 ## API
 
@@ -192,7 +195,7 @@ error on one event is logged and skipped, so it can never take down delivery for
 - [x] Async delivery via Redis queue + worker — delivery moved off the request path (producer enqueues event id, worker drains queue and delivers)
 - [x] Read paths — `GET /events`, `GET /events/{id}` + CORS for the dashboard
 - [x] Retries, exponential backoff, dead-letter queue, idempotency *(✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery, ✅ exponential backoff + jitter (ZSET scheduled queue), ✅ dead-letter queue + `POST /dlq/replay`, ✅ idempotency — terminal-status guard + `X-Idempotency-Key` header)*
-- [ ] Frontend dashboard (Next.js) *(in progress — ✅ emit-and-watch page; ⏳ events list, DLQ view + replay)*
+- [x] Frontend dashboard (Next.js) *(✅ emit-and-watch page, ✅ events list + status badges, ✅ DLQ view + replay button)*
 - [ ] HMAC signatures + API-key auth + rate limiting
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
 
