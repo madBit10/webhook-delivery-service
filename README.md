@@ -15,6 +15,7 @@ When something happens in one system (a payment succeeds, a build finishes), oth
 - Delivery runs on **async background workers** (no blocking the producer)
 - Failed deliveries **retry with exponential backoff + jitter**
 - Permanently-failing events move to a **dead-letter queue**, replayable on demand
+- Duplicate deliveries are made **safe** — a stable idempotency key + terminal-status guard (at-least-once, deduped)
 - Payloads are **signed (HMAC)** so receivers can verify authenticity
 - **Every delivery attempt is logged** for full observability
 
@@ -135,6 +136,15 @@ Delivery uses a **reliable queue**: the worker atomically moves each id to an in
 (`BLMOVE`) and only removes it after handling (`LREM`). If the worker crashes mid-delivery, the id
 survives and is re-queued on the next startup — so a hard crash can't orphan an event.
 
+Because delivery is **at-least-once**, the same event can be delivered more than once (e.g. the worker
+crashes *after* the POST but *before* recording the status, so recovery re-queues it). The service makes
+duplicates **safe** two ways: (1) before delivering, the worker **skips any event already in a terminal
+state** (`delivered`/`dead`), so a re-queued finished event is acked and dropped instead of re-sent; and
+(2) every outbound POST carries a stable **`X-Idempotency-Key: <event_id>`** header so the receiver can
+deduplicate the one case the sender can't prevent. The key is the event id (constant across all retries),
+not the attempt number. Exactly-once is impossible over a network — **at-least-once + idempotency** yields
+an exactly-once *effect*.
+
 Returns `201` — meaning the event was *accepted and stored*, not that it was delivered. If the referenced
 `endpoint_id` doesn't exist, returns `404` (validated in the app layer; the DB foreign key is a safety net).
 
@@ -164,8 +174,8 @@ Returns `201` — meaning the event was *accepted and stored*, not that it was d
 | Outcome | `success` | `response_status_code` | Event `status` |
 |---|---|---|---|
 | Receiver returns `2xx` | `true` | e.g. `200` | `delivered` |
-| Receiver returns non-`2xx` | `false` | e.g. `500` | `pending` → retry, then `failed` after 5 tries |
-| Receiver unreachable / timeout | `false` | `NULL` (no response) | `pending` → retry, then `failed` after 5 tries |
+| Receiver returns non-`2xx` | `false` | e.g. `500` | `pending` → retry, then `dead` (dead-lettered) after 5 tries |
+| Receiver unreachable / timeout | `false` | `NULL` (no response) | `pending` → retry, then `dead` (dead-lettered) after 5 tries |
 
 Each attempt row also records **`attempt_number`** (which try this was — 1, 2, 3…) and **`duration_ms`**
 (how long the outbound POST took, for observability). The **worker is crash-hardened**: an unexpected
@@ -181,7 +191,7 @@ error on one event is logged and skipped, so it can never take down delivery for
 - [x] Synchronous delivery — `deliver_event` (httpx POST + 5s timeout), `delivery_attempts` log (2nd FK), status → `delivered`/`failed`, all 3 outcomes verified
 - [x] Async delivery via Redis queue + worker — delivery moved off the request path (producer enqueues event id, worker drains queue and delivers)
 - [x] Read paths — `GET /events`, `GET /events/{id}` + CORS for the dashboard
-- [ ] Retries, exponential backoff, dead-letter queue, idempotency *(in progress — ✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery, ✅ exponential backoff + jitter (ZSET scheduled queue), ✅ dead-letter queue + `POST /dlq/replay`; ⏳ next: idempotency)*
+- [x] Retries, exponential backoff, dead-letter queue, idempotency *(✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery, ✅ exponential backoff + jitter (ZSET scheduled queue), ✅ dead-letter queue + `POST /dlq/replay`, ✅ idempotency — terminal-status guard + `X-Idempotency-Key` header)*
 - [ ] Frontend dashboard (Next.js) *(in progress — ✅ emit-and-watch page; ⏳ events list, DLQ view + replay)*
 - [ ] HMAC signatures + API-key auth + rate limiting
 - [ ] CI/CD, Terraform, cloud deploy, monitoring

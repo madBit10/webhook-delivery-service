@@ -38,6 +38,10 @@ def run_worker() -> None:
                 client.lrem(PROCESSING_KEY, 1, event_id) # ack before continue (nothing to recover for a ghost id)
                 print(f"Event {event_id} not found, skipping")
                 continue
+            if event.status in ("delivered", "dead"): # check if the event is in the terminal statuses if they are don't requeue them
+                client.lrem(PROCESSING_KEY, 1, event_id) # ack nothing to do more here
+                print(f"Event {event_id} already {event.status}, skipping")
+                continue
             # deliver_event(db, event) # reuse the Delivery here
             # print(f"Delivered event {event_id}, status={event.status}")
 
