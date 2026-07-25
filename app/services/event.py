@@ -56,7 +56,8 @@ def deliver_event(db: Session, event: Event) -> bool:
 
     # POST with httpx
     try:
-        response = httpx.post(url, json=payload, timeout=5.0)
+        headers = {"X-Idempotency-Key": str(event.id)} # header to recognize the duplicate events
+        response = httpx.post(url, json=payload, headers=headers, timeout=5.0)
 
         # got some response was it a 2xx?
         success = 200 <= response.status_code < 300
