@@ -2,11 +2,13 @@ from sqlalchemy.orm import Session
 from typing import Optional
 import httpx
 import time
+import json
 
 
 from app.api.schemas.event import EventCreate
 from app.db.repository import create_event, get_endpoint as get_endpoint_repo, create_delivery_attempt, count_delivery_attempts, get_events as get_events_repo, get_event as get_event_repo
 from app.db.model import Event
+from app.core.security import sign_payload
 
 # Pass-through to the repo's paginated event fetch. Kept as a service layer for consistency
 # (Router → Service → Repository) and as a hook for future logic (filtering, auth).
@@ -47,17 +49,33 @@ def deliver_event(db: Session, event: Event) -> bool:
     # payload of the event
     payload = event.payload
 
+    # serializing the payload 
+    request_body = json.dumps(payload).encode()
+
     # attempt_number adding to the deliver event function to track the number of attempts made
     attempt_number = count_delivery_attempts(db, event.id) + 1
 
-    # start time using time.perf_counter
+    # unix seconds using the time.time()
 
+    timestamp = int(time.time())
+
+    # hmac signature
+
+    signature = sign_payload(endpoint.secret, timestamp, request_body)   
+
+    # start time using time.perf_counter()
+    
     start = time.perf_counter()
 
     # POST with httpx
     try:
-        headers = {"X-Idempotency-Key": str(event.id)} # header to recognize the duplicate events
-        response = httpx.post(url, json=payload, headers=headers, timeout=5.0)
+        headers = {
+            "Content-Type": "application/json",
+            "X-Idempotency-Key": str(event.id),
+            "X-Webhook-Timestamp": str(timestamp),
+            "X-Webhook-Signature": signature
+            } # header to recognize the duplicate events
+        response = httpx.post(url, content=request_body, headers=headers, timeout=5.0)
 
         # got some response was it a 2xx?
         success = 200 <= response.status_code < 300
