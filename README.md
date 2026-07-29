@@ -16,7 +16,7 @@ When something happens in one system (a payment succeeds, a build finishes), oth
 - Failed deliveries **retry with exponential backoff + jitter**
 - Permanently-failing events move to a **dead-letter queue**, replayable on demand
 - Duplicate deliveries are made **safe** — a stable idempotency key + terminal-status guard (at-least-once, deduped)
-- Payloads are **signed (HMAC)** so receivers can verify authenticity
+- Every delivery is **HMAC-signed** over the exact bytes sent, with a timestamp to block replays — receivers can prove it came from us and wasn't tampered with
 - **Every delivery attempt is logged** for full observability
 
 ## Tech Stack
@@ -126,7 +126,8 @@ its id is **pushed onto a Redis queue**, and the endpoint returns **immediately*
 `status: "pending"` (delivery hasn't happened yet).
 
 A background **worker** (`python -m app.worker`) pulls each id off the queue, loads the event from the DB,
-POSTs the payload to the endpoint's URL (`httpx`, 5s timeout), and records the outcome in
+POSTs the payload to the endpoint's URL (`httpx`, 5s timeout) — **signed with that endpoint's secret**
+(see [Verifying webhook signatures](#verifying-webhook-signatures)) — and records the outcome in
 `delivery_attempts`. On failure it **retries up to 5 times with exponential backoff + jitter** — delays
 double each attempt (~1, 2, 4, 8s, randomized) via a Redis sorted-set scheduled queue, so a struggling
 endpoint gets increasing breathing room instead of being hammered. `status` stays `pending` between
@@ -184,6 +185,79 @@ Each attempt row also records **`attempt_number`** (which try this was — 1, 2,
 (how long the outbound POST took, for observability). The **worker is crash-hardened**: an unexpected
 error on one event is logged and skipped, so it can never take down delivery for the rest of the queue.
 
+## Verifying webhook signatures
+
+Your endpoint is a URL on the public internet — anyone who discovers it can POST to it, and HTTPS won't
+tell you who sent what (TLS secures the *channel*, not the *sender*). So every delivery is **signed** with
+the secret generated when you registered the endpoint.
+
+**Always verify the signature before acting on a webhook.**
+
+### Headers on every delivery
+
+| Header | Meaning |
+|--------|---------|
+| `X-Webhook-Signature` | HMAC-SHA256 of the signed message, hex-encoded (64 chars) |
+| `X-Webhook-Timestamp` | Unix seconds when the request was signed |
+| `X-Idempotency-Key` | The event id — stable across all retries, use it to deduplicate |
+| `Content-Type` | `application/json` |
+
+### The signed message
+
+```
+signature = HMAC-SHA256(key = <your endpoint secret>, message = "<timestamp>.<raw request body>")
+```
+
+The timestamp is *inside* the signed message, so it can't be altered without breaking the signature.
+
+### Verifying it
+
+```python
+import hmac, hashlib, time
+
+def verify(secret: str, raw_body: bytes, timestamp: str, signature: str) -> bool:
+    # reject replays: anything more than 5 minutes off, in either direction
+    try:
+        if abs(time.time() - int(timestamp)) > 300:
+            return False
+    except ValueError:
+        return False
+
+    expected = hmac.new(
+        secret.encode(),
+        f"{timestamp}.".encode() + raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(expected, signature)
+```
+
+A complete runnable receiver — the one used to verify this implementation end-to-end — lives in
+[`examples/verify_receiver.py`](examples/verify_receiver.py).
+
+### Three things that will bite you
+
+- **Hash the RAW request body, never a re-serialized version.** JSON isn't canonical — parsing the body and
+  dumping it again produces different bytes (different key order, different whitespace) and the signature
+  will never match. In FastAPI use `await request.body()`, not `await request.json()`.
+- **Compare with `hmac.compare_digest`, never `==`.** String equality short-circuits on the first differing
+  byte, so response timing leaks the signature one byte at a time. `compare_digest` is constant-time.
+- **Check the timestamp.** A signature is valid forever, so without a freshness window a captured request can
+  be replayed indefinitely — every copy with a perfectly valid signature.
+
+Reject with `401` and return the *same* error for every failure mode. Telling the caller which check failed
+lets an attacker probe your validation one condition at a time.
+
+### Getting your secret
+
+The secret is generated with `secrets.token_hex(32)` at registration and is **never returned by the API** —
+not on create, not on read. Each endpoint gets its own. In this project it's read straight from the database:
+
+```bash
+docker compose exec db psql -U example -d exampledb \
+  -c "SELECT id, url, secret FROM endpoints ORDER BY id DESC LIMIT 1;"
+```
+
 ## Roadmap
 
 - [x] Layered FastAPI scaffold + `/health` endpoint
@@ -196,7 +270,10 @@ error on one event is logged and skipped, so it can never take down delivery for
 - [x] Read paths — `GET /events`, `GET /events/{id}` + CORS for the dashboard
 - [x] Retries, exponential backoff, dead-letter queue, idempotency *(✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery, ✅ exponential backoff + jitter (ZSET scheduled queue), ✅ dead-letter queue + `POST /dlq/replay`, ✅ idempotency — terminal-status guard + `X-Idempotency-Key` header)*
 - [x] Frontend dashboard (Next.js) *(✅ emit-and-watch page, ✅ events list + status badges, ✅ DLQ view + replay button)*
-- [ ] HMAC signatures + API-key auth + rate limiting
+- [x] HMAC request signing — every delivery signed over the exact bytes sent (`X-Webhook-Signature` + `X-Webhook-Timestamp`), replay-protected, verified end-to-end against an independent receiver
+- [ ] API-key auth + rate limiting
+- [ ] Retry policy by status class (retry `5xx`/timeouts, dead-letter most `4xx` immediately)
+- [ ] Secret encryption at rest + secret rotation
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
 
 ---
