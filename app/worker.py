@@ -1,7 +1,7 @@
 from app.db.database import SessionLocal
 from app.db.redis_client import client, QUEUE_KEY, PROCESSING_KEY, schedule_retry, promote_due_retries, dead_letter
 from app.db.repository import get_event, update_event_status, count_delivery_attempts
-from app.services.event import deliver_event
+from app.services.event import deliver_event, DeliveryOutcome
 
 MAX_ATTEMPTS = 5 # maximum retries const 
 # recover the orphan ids that are stuck in the processing queue of the redis
@@ -47,12 +47,11 @@ def run_worker() -> None:
 
             # status changed handled by the worker was in the deliver event function previously
 
-            success = deliver_event(db, event) # sucess flag from the deliver_event function
-            # if the event succeeds then change the status to success
-            if success:
-                update_event_status(db, event.id, "delivered")
+            outcome = deliver_event(db, event) # delivery outcome from the deliver event function in event.py from services
+            if outcome is DeliveryOutcome.DELIVERED:
+                update_event_status(db, event.id, "delivered") # update the event status as delivered if the outcome points to DELIVERED
                 print(f"Delivered event {event_id}")
-            else:
+            elif outcome is DeliveryOutcome.RETRYABLE: # the delivery failed in a way that might succeed if we try again — 5xx, timeout, 408, 429
                 attempts = count_delivery_attempts(db, event.id) # store the delivery attempts in the attempts variable
                 if attempts < MAX_ATTEMPTS:
                     delay = schedule_retry(event.id, attempts) # retry - status is still pending for these events until the maximum attempts are made
@@ -62,6 +61,10 @@ def run_worker() -> None:
                     update_event_status(db, event.id, "dead") # maximum number of the attempts reached the event status saved as dead
 
                     print(f"Event {event_id} failed permanently after {attempts} attempts, now the {event_id} is stated as dead in the database")
+            else: # TERMINAL status
+                dead_letter(event_id) # push the event to dead letter queue
+                update_event_status(db, event.id, "dead") # event status updated to dead 
+                print(f"Event {event_id} rejected by receiver - dead-lettered without retry")
 
             # ack once handling complete - after the if and else block so it only runs if handling finished without an exception
             client.lrem(PROCESSING_KEY, 1, event_id) # ACK: handled -> remove from the processing
