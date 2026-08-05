@@ -13,7 +13,7 @@ When something happens in one system (a payment succeeds, a build finishes), oth
 - Producers **register endpoints** (subscriber URLs) and **emit events**
 - Every event is **durably stored** before any delivery is attempted
 - Delivery runs on **async background workers** (no blocking the producer)
-- Failed deliveries **retry with exponential backoff + jitter**
+- Failed deliveries **retry with exponential backoff + jitter** — but only when retrying could help; a rejected request (`4xx`) is dead-lettered on the first attempt
 - Permanently-failing events move to a **dead-letter queue**, replayable on demand
 - Duplicate deliveries are made **safe** — a stable idempotency key + terminal-status guard (at-least-once, deduped)
 - Every delivery is **HMAC-signed** over the exact bytes sent, with a timestamp to block replays — receivers can prove it came from us and wasn't tampered with
@@ -128,13 +128,30 @@ its id is **pushed onto a Redis queue**, and the endpoint returns **immediately*
 A background **worker** (`python -m app.worker`) pulls each id off the queue, loads the event from the DB,
 POSTs the payload to the endpoint's URL (`httpx`, 5s timeout) — **signed with that endpoint's secret**
 (see [Verifying webhook signatures](#verifying-webhook-signatures)) — and records the outcome in
-`delivery_attempts`. On failure it **retries up to 5 times with exponential backoff + jitter** — delays
-double each attempt (~1, 2, 4, 8s, randomized) via a Redis sorted-set scheduled queue, so a struggling
-endpoint gets increasing breathing room instead of being hammered. `status` stays `pending` between
-tries; only once retries are exhausted is the event **dead-lettered** — pushed onto a separate
-`webhook:dead` list and marked terminal `dead` (success → `delivered`). Dead events aren't retried
-automatically; `POST /dlq/replay` re-drives them back onto the queue (e.g. after the receiver is fixed) —
-the re-attempt itself is the "is it back up?" check.
+`delivery_attempts`.
+
+On failure, **the retry decision depends on why it failed** — the service retries what might succeed later and
+gives up immediately on what's permanently wrong:
+
+| Response | Classified | Behaviour |
+|---|---|---|
+| `2xx` | delivered | → `delivered` |
+| `5xx` | retryable | retry with backoff |
+| no response (timeout, connection refused, DNS) | retryable | retry with backoff |
+| `408`, `429` | retryable | retry with backoff *(4xx exceptions)* |
+| other `4xx` (400, 401, 403, 404, 422) | **terminal** | **dead-lettered immediately, no retries** |
+| anything else (`3xx`, `1xx`) | **terminal** | dead-lettered immediately *(fail closed)* |
+
+A wrong signing secret returning `401` will still be wrong in 60 seconds — retrying it five times only delays
+the dead-letter entry that should alert a human. `408` and `429` are the deliberate exceptions: both are 4xx
+but genuinely transient.
+
+Retryable failures **retry up to 5 times with exponential backoff + jitter** — delays double each attempt
+(~1, 2, 4, 8s, randomized) via a Redis sorted-set scheduled queue, so a struggling endpoint gets increasing
+breathing room instead of being hammered. `status` stays `pending` between tries; only once retries are
+exhausted is the event **dead-lettered** — pushed onto a separate `webhook:dead` list and marked terminal
+`dead` (success → `delivered`). Dead events aren't retried automatically; `POST /dlq/replay` re-drives them
+back onto the queue (e.g. after the receiver is fixed) — the re-attempt itself is the "is it back up?" check.
 
 Delivery uses a **reliable queue**: the worker atomically moves each id to an in-flight `processing` list
 (`BLMOVE`) and only removes it after handling (`LREM`). If the worker crashes mid-delivery, the id
@@ -175,11 +192,13 @@ Returns `201` — meaning the event was *accepted and stored*, not that it was d
 
 **Delivery outcomes** — every attempt is logged in `delivery_attempts`:
 
-| Outcome | `success` | `response_status_code` | Event `status` |
-|---|---|---|---|
-| Receiver returns `2xx` | `true` | e.g. `200` | `delivered` |
-| Receiver returns non-`2xx` | `false` | e.g. `500` | `pending` → retry, then `dead` (dead-lettered) after 5 tries |
-| Receiver unreachable / timeout | `false` | `NULL` (no response) | `pending` → retry, then `dead` (dead-lettered) after 5 tries |
+| Outcome | `success` | `response_status_code` | Attempts | Event `status` |
+|---|---|---|---|---|
+| Receiver returns `2xx` | `true` | e.g. `200` | 1 | `delivered` |
+| Receiver returns `5xx` | `false` | e.g. `500` | up to 5 | `pending` → retry → `dead` after 5 tries |
+| Receiver unreachable / timeout | `false` | **`NULL`** (no response) | up to 5 | `pending` → retry → `dead` after 5 tries |
+| Receiver returns `408` / `429` | `false` | e.g. `429` | up to 5 | `pending` → retry → `dead` after 5 tries |
+| Receiver **rejects** (other `4xx`) | `false` | e.g. `401` | **1** | **`dead` immediately — no retries** |
 
 Each attempt row also records **`attempt_number`** (which try this was — 1, 2, 3…) and **`duration_ms`**
 (how long the outbound POST took, for observability). The **worker is crash-hardened**: an unexpected
@@ -271,8 +290,8 @@ docker compose exec db psql -U example -d exampledb \
 - [x] Retries, exponential backoff, dead-letter queue, idempotency *(✅ retry schema + crash-hardened worker, ✅ retry-on-failure w/ cap, ✅ reliable queue (`BLMOVE`) + crash recovery, ✅ exponential backoff + jitter (ZSET scheduled queue), ✅ dead-letter queue + `POST /dlq/replay`, ✅ idempotency — terminal-status guard + `X-Idempotency-Key` header)*
 - [x] Frontend dashboard (Next.js) *(✅ emit-and-watch page, ✅ events list + status badges, ✅ DLQ view + replay button)*
 - [x] HMAC request signing — every delivery signed over the exact bytes sent (`X-Webhook-Signature` + `X-Webhook-Timestamp`), replay-protected, verified end-to-end against an independent receiver
+- [x] Retry policy by status class — `DeliveryOutcome` enum (`DELIVERED`/`RETRYABLE`/`TERMINAL`); retries `5xx`, timeouts, `408`/`429`; dead-letters other `4xx` on the first attempt. All 6 classification branches verified against a local status server
 - [ ] API-key auth + rate limiting
-- [ ] Retry policy by status class (retry `5xx`/timeouts, dead-letter most `4xx` immediately)
 - [ ] Secret encryption at rest + secret rotation
 - [ ] CI/CD, Terraform, cloud deploy, monitoring
 
