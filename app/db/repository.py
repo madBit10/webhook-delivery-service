@@ -2,6 +2,8 @@ from app.db.model import Endpoint, Event, DeliveryAttempt
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
+from sqlalchemy import func
+from datetime import datetime, timedelta, timezone
 
 
 # create_endpoint inserts rows in the endpoint table
@@ -108,3 +110,29 @@ def count_delivery_attempts(db: Session, event_id: int)-> int:
     # attempt_number = prior delivery attempts + 1
 
     return db.query(DeliveryAttempt).filter(DeliveryAttempt.event_id == event_id).count()
+
+def get_stale_pending_events(db:Session, cutoff: datetime, limit: int = 100) -> list[Event]:
+
+    # "When was anything last done to this event?"
+    #   max(attempted_at) -> its newest delivery attempt
+    #   COALESCE          -> falls back to created_at for events with NO attempts,
+    #                        where the LEFT JOIN leaves max() as NULL
+    # We measure silence from here, not from created_at, because created_at never
+    # changes: an event we re-queued 30s ago would still look ancient and get
+    # swept again while its retry is still pending -> duplicate delivery.
+
+    last_activity = func.coalesce(func.max(DeliveryAttempt.attempted_at), Event.created_at)
+
+    q=(db.query(Event)
+        .outerjoin(DeliveryAttempt, DeliveryAttempt.event_id == Event.id) # model, then the ON condition
+        .filter(Event.status == 'pending')
+        .group_by(Event.id)
+        .having(last_activity < cutoff) # group level: the aggregate
+        .order_by(last_activity)
+        .limit(limit)
+        ) 
+
+    # print(q)
+
+    return q.all()
+
