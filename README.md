@@ -16,6 +16,7 @@ When something happens in one system (a payment succeeds, a build finishes), oth
 - Failed deliveries **retry with exponential backoff + jitter** — but only when retrying could help; a rejected request (`4xx`) is dead-lettered on the first attempt
 - Permanently-failing events move to a **dead-letter queue**, replayable on demand
 - Duplicate deliveries are made **safe** — a stable idempotency key + terminal-status guard (at-least-once, deduped)
+- A background **reconciler** periodically re-derives outstanding work from the database, so events the queue has lost track of are found and re-queued instead of being stranded forever
 - Every delivery is **HMAC-signed** over the exact bytes sent, with a timestamp to block replays — receivers can prove it came from us and wasn't tampered with
 - **Every delivery attempt is logged** for full observability
 
@@ -291,6 +292,7 @@ docker compose exec db psql -U example -d exampledb \
 - [x] Frontend dashboard (Next.js) *(✅ emit-and-watch page, ✅ events list + status badges, ✅ DLQ view + replay button)*
 - [x] HMAC request signing — every delivery signed over the exact bytes sent (`X-Webhook-Signature` + `X-Webhook-Timestamp`), replay-protected, verified end-to-end against an independent receiver
 - [x] Retry policy by status class — `DeliveryOutcome` enum (`DELIVERED`/`RETRYABLE`/`TERMINAL`); retries `5xx`, timeouts, `408`/`429`; dead-letters other `4xx` on the first attempt. All 6 classification branches verified against a local status server
+- [x] Pending sweep (reconciliation) — a periodic loop re-derives owed work from Postgres rather than trusting Redis to remember it. Events that have gone silent past a staleness threshold are re-queued; events older than the retry window are dead-lettered without being delivered. Closes the last way an event could be stranded in `pending` forever
 - [ ] API-key auth + rate limiting
 - [ ] Secret encryption at rest + secret rotation
 - [ ] CI/CD, Terraform, cloud deploy, monitoring

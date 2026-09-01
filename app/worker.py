@@ -2,8 +2,11 @@ from app.db.database import SessionLocal
 from app.db.redis_client import client, QUEUE_KEY, PROCESSING_KEY, schedule_retry, promote_due_retries, dead_letter
 from app.db.repository import get_event, update_event_status, count_delivery_attempts
 from app.services.event import deliver_event, DeliveryOutcome
+import time
+from app.services.sweep import sweep_pending_events
 
 MAX_ATTEMPTS = 5 # maximum retries const 
+SWEEP_INTERVAL = 60.0 # seconds
 # recover the orphan ids that are stuck in the processing queue of the redis
 
 def recover_orphans() -> None:
@@ -19,12 +22,38 @@ def run_worker() -> None:
     print("Worker started, waiting for events...")
     recover_orphans() # reclaim anything a previous crash left
     
+    last_sweep = time.monotonic() - SWEEP_INTERVAL # loops memory - has some time passed since the last_sweep
     
     while True:
         # block until an id shows up; returns(queue_name, value)
         
         event_id = client.blmove(QUEUE_KEY, PROCESSING_KEY, timeout=1, src="RIGHT", dest="LEFT") # src = RIGHT mimics the old BRPOPs and the dest = LEFT pushes it into the processing list
         promote_due_retries() #this is what moves the due retries back onto the main queue
+
+        # whether the interval has elapsed - if elapsed, run the sweep and reset the timestamp
+        now = time.monotonic()
+        if now - last_sweep >= SWEEP_INTERVAL:
+            last_sweep = now 
+
+            # session local to touch db
+            db = SessionLocal() 
+
+            try:
+                requeued, expired = sweep_pending_events(db) # getting the lists from pending sweep events
+                # logging the lists from sweep pending events
+                if requeued:
+                    print(f"Sweep re-queued {len(requeued)} stranded events: {requeued}")
+                if expired:
+                    print(f"Sweep expired {len(expired)} events: {expired}")
+
+            except Exception as e:
+                print(f"Sweep failed: {e}")
+
+            finally:
+                db.close()
+
+
+
 
         if event_id is None: 
             continue # idle seconds don't crash the worker
