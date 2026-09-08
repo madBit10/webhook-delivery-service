@@ -7,6 +7,12 @@ on: # when the intern shows up
 jobs: # a map of job_id -> job
   test: # 'test' is an id YOU choose; it's the label in the UI
     runs-on: ubuntu-latest # What machine - a fresh Ubuntu VM, wiped after
+    env: 
+      DATABASE_URL: 
+        postgresql://postgres:postgres@localhost:5432/exampledb
+      TEST_DATABASE_URL: 
+        postgresql://postgres:postgres@localhost:5432/exampledb_test
+      REDIS_URL: redis://localhost:6379/0
 
     steps: # a LIST - order matters, runs top to bottom
       - uses: actions/checkout@v4 # clone the repo into the working directory
