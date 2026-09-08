@@ -14,6 +14,21 @@ jobs: # a map of job_id -> job
         postgresql://postgres:postgres@localhost:5432/exampledb_test
       REDIS_URL: redis://localhost:6379/0
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: exampledb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps: # a LIST - order matters, runs top to bottom
       - uses: actions/checkout@v4 # clone the repo into the working directory
         # without this the VM is empty; nothing else works 
