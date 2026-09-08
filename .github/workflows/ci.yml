@@ -1,0 +1,20 @@
+name: CI # shows up as the run's title in the Actions tab
+
+on: # when the intern shows up
+  push: # every push, any branch
+  pull_request: # and every PR (catches the merged result)
+
+jobs: # a map of job_id -> job
+  test: # 'test' is an id YOU choose; it's the label in the UI
+    runs-on: ubuntu-latest # What machine - a fresh Ubuntu VM, wiped after
+
+    steps: # a LIST - order matters, runs top to bottom
+      - uses: actions/checkout@v4 # clone the repo into the working directory
+        # without this the VM is empty; nothing else works 
+      - uses: actions/setup-python@v5
+        with: # 'with:' = args to the action directly above it 
+          python-version: "3.12" # quoted, or YAML reads 3.10 as the number 3.1
+
+      - run: pip install -r requirements.txt # 'run:' = a shell command
+
+      - run: pytest -q # the verdict: exit 0 = green, anything else = red
