@@ -2,6 +2,8 @@
 
 A reliable webhook delivery platform — the infrastructure layer that guarantees an event *eventually* reaches its subscriber, even when the receiver is down, slow, or failing. Think of the delivery system that powers Stripe and GitHub webhooks.
 
+[![CI](https://github.com/madBit10/webhook-delivery-service/actions/workflows/ci.yml/badge.svg)](https://github.com/madBit10/webhook-delivery-service/actions/workflows/ci.yml)
+
 > **Status:** 🚧 In active development — built as a deep-dive into production-grade Python backend + DevOps.
 
 ## The Problem
@@ -28,8 +30,8 @@ When something happens in one system (a payment succeeds, a build finishes), oth
 | Persistence | PostgreSQL + SQLAlchemy + Alembic |
 | Async / queue | Redis + workers |
 | Frontend | Next.js (App Router) + TypeScript + Tailwind — a dashboard in `frontend/` |
-| Testing | pytest + httpx TestClient |
-| DevOps | Docker, docker-compose, GitHub Actions CI/CD, Terraform, AWS, Prometheus + Grafana |
+| Testing | pytest + httpx TestClient, run against a real Postgres in CI |
+| DevOps | Docker, docker-compose, GitHub Actions CI/CD, Terraform, Azure, Prometheus + Grafana |
 
 ## Architecture
 
@@ -83,6 +85,44 @@ Three pages, wired together with shared nav:
 - **Emit & watch** (`/`) — posts an event and polls its status live (`pending → delivered / dead`).
 - **Events** (`/events`) — lists all events with color-coded status badges.
 - **Dead-letter queue** (`/dlq`) — shows dead-lettered events with a **Replay** button (`POST /dlq/replay`).
+
+## Tests
+
+```bash
+docker compose up -d                                        # tests need a real Postgres
+docker compose exec db createdb -U <POSTGRES_USER> <POSTGRES_DB>_test   # once
+python -m pytest -q
+```
+
+The suite talks to a **separate database on the same Postgres**, not SQLite — the code relies on
+`TRUNCATE ... RESTART IDENTITY CASCADE`, `timestamptz`, and a `GROUP BY`/`HAVING` aggregate that SQLite would
+either reject or quietly treat differently.
+
+- By default the test database is `DATABASE_URL` + `_test`; set **`TEST_DATABASE_URL`** to point somewhere else.
+- The schema is created once per session and dropped at the end; each test gets a fresh session and every table
+  is truncated afterwards, so tests can't leak state into each other.
+- Either `pytest` or `python -m pytest` works — `tests/__init__.py` makes pytest treat the repo root as the
+  import base, so `import app` resolves. `python -m pytest` is the safer habit: it puts the current directory
+  on `sys.path` itself, so it keeps working if that `__init__.py` ever goes away.
+
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request:
+
+| Step | What it does |
+|------|--------------|
+| `actions/checkout` | clone the repo onto a clean Ubuntu runner |
+| `actions/setup-python` | install **Python 3.12** — the version the Dockerfile ships |
+| `pip install -r requirements.txt` | install pinned dependencies from scratch |
+| `pytest -q` | run the full suite |
+
+A **`postgres:16` service container** runs alongside the job — same major version as `docker-compose.yml` — with
+a `pg_isready` health check so the tests can't start before the database accepts connections. Connection details
+are passed as job-level `env:` vars; they're plaintext on purpose, since they only address a throwaway container
+that's destroyed when the job ends.
+
+`main` is protected by a repository ruleset: **the `test` check is required**, changes land through pull
+requests, and force pushes and branch deletion are blocked.
 
 ## API
 
@@ -293,9 +333,12 @@ docker compose exec db psql -U example -d exampledb \
 - [x] HMAC request signing — every delivery signed over the exact bytes sent (`X-Webhook-Signature` + `X-Webhook-Timestamp`), replay-protected, verified end-to-end against an independent receiver
 - [x] Retry policy by status class — `DeliveryOutcome` enum (`DELIVERED`/`RETRYABLE`/`TERMINAL`); retries `5xx`, timeouts, `408`/`429`; dead-letters other `4xx` on the first attempt. All 6 classification branches verified against a local status server
 - [x] Pending sweep (reconciliation) — a periodic loop re-derives owed work from Postgres rather than trusting Redis to remember it. Events that have gone silent past a staleness threshold are re-queued; events older than the retry window are dead-lettered without being delivered. Closes the last way an event could be stranded in `pending` forever
+- [x] Test suite — pytest against a real Postgres: pure-function tests (`classify_response`, HMAC signing), repository tests, and API tests using `dependency_overrides`
+- [x] Continuous integration — GitHub Actions on every push and PR: clean runner, Python 3.12, `postgres:16` service container with a health check, full suite. `main` is gated by a required status check behind pull requests, with force pushes and deletion blocked
 - [ ] API-key auth + rate limiting
 - [ ] Secret encryption at rest + secret rotation
-- [ ] CI/CD, Terraform, cloud deploy, monitoring
+- [ ] Continuous deployment + cloud infrastructure — Terraform, Azure Container Apps, managed Postgres/Redis, secrets in Key Vault, deploy via GitHub Actions + OIDC
+- [ ] Observability — Prometheus + Grafana (per-attempt status codes, delivery latency, retry counts, queue depth)
 
 ---
 
